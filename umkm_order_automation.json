@@ -1,0 +1,1051 @@
+{
+  "name": "Stall Order Bot - Order and Sales Report Automation (Telegram + LLM + Postgres)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Stall Order Bot\nOrders are typed freely in Telegram, parsed by an LLM, then validated and priced in a Code node (prices and stock ALWAYS come from the database, never from the LLM) and saved atomically to PostgreSQL.\n\n**Before running:**\n1. Run sql/schema.sql on PostgreSQL\n2. Attach credentials: Telegram, OpenAI, Postgres\n3. Replace `REPLACE_WITH_YOUR_CHAT_ID` in the 'Access Check' node\n4. Replace `REPLACE_WITH_OWNER_CHAT_ID` in the 'Owner Chat' node\n5. n8n must be reachable over public HTTPS (Telegram webhook)",
+        "height": 340,
+        "width": 560,
+        "color": 4
+      },
+      "id": "5fa39dfd-d764-496e-bac8-92cf84b692a2",
+      "name": "Notes - General",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -100,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Order flow\nThe LLM only extracts item names and quantities. Menu matching, prices, totals and stock checks happen in 'Validate & Calculate'. The order, its items and the stock decrement are saved in ONE query (atomic). Duplicate Telegram updates are ignored via UNIQUE telegram_update_id.",
+        "height": 200,
+        "width": 560,
+        "color": 5
+      },
+      "id": "911957e4-22d1-4d48-831b-286b7b0f0452",
+      "name": "Notes - Orders",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1060,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Daily report\nThe 21:00 schedule (workflow timezone: Asia/Jakarta) uses the same query as the /report command.",
+        "height": 140,
+        "width": 460,
+        "color": 6
+      },
+      "id": "d4840cec-f374-4fcf-b4b8-cbb1c02f1eb4",
+      "name": "Notes - Report",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -100,
+        1180
+      ]
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "62cd3eaf-6f1f-4b5b-8df7-c9dcc1fea736",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ID",
+          "name": "Telegram account"
+        }
+      },
+      "webhookId": "5dbe0af5-b824-4a1b-9ac0-32d3a40fb56c"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e8060df5-de42-4d7e-9572-fe5b06639c20",
+              "name": "chat_id",
+              "value": "={{ String($json.message?.chat?.id ?? '') }}",
+              "type": "string"
+            },
+            {
+              "id": "9edb09c2-b680-413b-abd1-c7c0cf17fff7",
+              "name": "update_id",
+              "value": "={{ String($json.update_id) }}",
+              "type": "string"
+            },
+            {
+              "id": "ccac0c8a-be3f-41fd-aa47-8d7daac5dbf6",
+              "name": "text",
+              "value": "={{ ($json.message?.text ?? '').trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "544ea5ae-52e4-4f99-b7ca-debb71f845b2",
+              "name": "from_name",
+              "value": "={{ $json.message?.from?.first_name ?? '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7aa61c77-c0b5-477e-bc17-bac4497ac235",
+      "name": "Normalize Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d3569b14-89dd-4b93-9260-cc1f3efc801d",
+              "leftValue": "={{ $json.text !== '' && ['REPLACE_WITH_YOUR_CHAT_ID'].includes($json.chat_id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e7228823-0520-4426-9298-b269307f3ce1",
+      "name": "Access Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5dce0791-99f1-411c-be19-6407d03828a7",
+              "name": "chat_id",
+              "value": "={{ $json.chat_id }}",
+              "type": "string"
+            },
+            {
+              "id": "bbff7845-6d13-45c6-b42d-91e21cccb716",
+              "name": "reply_text",
+              "value": "={{ 'Access denied. Your chat ID is: ' + $json.chat_id + '\\nAsk the owner to add it to the allow-list. This bot only accepts text messages.' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "de3dcf90-531a-4093-9763-463abbc774ff",
+      "name": "Access Denied Text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        720,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "c8fbb613-8455-48b4-ae6e-64ca1b5c556d",
+                    "leftValue": "={{ $json.text }}",
+                    "rightValue": "/report",
+                    "operator": {
+                      "type": "string",
+                      "operation": "startsWith"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "report"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "b7d1f3f5-9691-427c-8b8d-3dcef33c0c01",
+                    "leftValue": "={{ $json.text }}",
+                    "rightValue": "/stock",
+                    "operator": {
+                      "type": "string",
+                      "operation": "startsWith"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "stock"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "dc674ab6-bbfe-4344-984f-007b358f026b",
+                    "leftValue": "={{ $json.text }}",
+                    "rightValue": "/menu",
+                    "operator": {
+                      "type": "string",
+                      "operation": "startsWith"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "menu"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "6cdbcd25-59b6-4e04-b404-b59f35ca7310",
+                    "leftValue": "={{ $json.text }}",
+                    "rightValue": "/help",
+                    "operator": {
+                      "type": "string",
+                      "operation": "startsWith"
+                    }
+                  },
+                  {
+                    "id": "d676af7b-c722-4276-8029-10e2d01d50d6",
+                    "leftValue": "={{ $json.text }}",
+                    "rightValue": "/start",
+                    "operator": {
+                      "type": "string",
+                      "operation": "startsWith"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "help"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "order"
+        }
+      },
+      "id": "e4072cfb-f02c-41d6-8feb-3b993be56648",
+      "name": "Route Message",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        720,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "37800772-8d4c-4a5b-adad-3a8f047cfe16",
+              "name": "chat_id",
+              "value": "={{ $json.chat_id }}",
+              "type": "string"
+            },
+            {
+              "id": "9ea24d61-e936-47e2-9c5b-abe2be75775f",
+              "name": "reply_text",
+              "value": "Stall Order Bot\n\nSend an order in plain language, for example:\n2 nasi goreng, 1 es teh for Budi\n\nCommands:\n/menu - menu and prices\n/stock - stock levels (low items are flagged)\n/report - today's sales summary\n/help - show this message\n\nA daily report is sent to the owner automatically at 21:00 (Asia/Jakarta).",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3577d719-ddcc-4abe-981c-d6ce000ef790",
+      "name": "Help Text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        980,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH today AS (\n  SELECT id, total FROM orders\n  WHERE status = 'completed'\n    AND created_at >= (date_trunc('day', now() AT TIME ZONE 'Asia/Jakarta') AT TIME ZONE 'Asia/Jakarta')\n),\ntop AS (\n  SELECT oi.name, SUM(oi.qty) AS qty, SUM(oi.subtotal) AS revenue\n  FROM order_items oi JOIN today t ON t.id = oi.order_id\n  GROUP BY oi.name ORDER BY qty DESC LIMIT 5\n)\nSELECT $1::text AS chat_id,\n       (SELECT COUNT(*) FROM today) AS order_count,\n       (SELECT COALESCE(SUM(total), 0) FROM today) AS revenue,\n       COALESCE((SELECT jsonb_agg(to_jsonb(top)) FROM top), '[]'::jsonb) AS top_items;",
+        "options": {
+          "queryReplacement": "={{ $json.chat_id }}"
+        }
+      },
+      "id": "eab9233c-c679-4748-8876-0855f671cda5",
+      "name": "Report Query",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        980,
+        140
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ID",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const fmt = n => 'Rp' + String(Math.round(Number(n) || 0)).replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\nconst r = $input.first().json;\nconst date = new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Jakarta', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });\nlet t = 'Sales Report\\n' + date + '\\n\\nOrders: ' + r.order_count + '\\nRevenue: ' + fmt(r.revenue);\nconst top = r.top_items || [];\nif (top.length) t += '\\n\\nTop items:\\n' + top.map((x, i) => (i + 1) + '. ' + x.name + ' - ' + x.qty + ' sold (' + fmt(x.revenue) + ')').join('\\n');\nelse t += '\\n\\nNo sales yet today.';\nreturn [{ json: { chat_id: r.chat_id, reply_text: t } }];"
+      },
+      "id": "4165ef10-db40-4f0a-b31c-41f6438e04bd",
+      "name": "Format Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT $1::text AS chat_id,\n       COALESCE(jsonb_agg(jsonb_build_object('name', name, 'stock', stock, 'min_stock', min_stock) ORDER BY stock, name), '[]'::jsonb) AS items\nFROM menu WHERE active AND track_stock;",
+        "options": {
+          "queryReplacement": "={{ $json.chat_id }}"
+        }
+      },
+      "id": "4c67d383-c0f6-45fa-a3ed-a1dd0a6d33bd",
+      "name": "Stock Query",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        980,
+        280
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ID",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const r = $input.first().json;\nconst items = r.items || [];\nlet t = 'Menu Stock\\n\\n';\nif (!items.length) t += 'No menu items with stock tracking yet.';\nelse t += items.map(x => x.name + ': ' + x.stock + (Number(x.stock) <= Number(x.min_stock) ? '  (LOW)' : '')).join('\\n');\nreturn [{ json: { chat_id: r.chat_id, reply_text: t } }];"
+      },
+      "id": "210e1db3-f2ba-40e8-a52f-06781e505f85",
+      "name": "Format Stock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT $1::text AS chat_id,\n       COALESCE(jsonb_agg(jsonb_build_object('name', name, 'price', price, 'stock', stock, 'track_stock', track_stock) ORDER BY name), '[]'::jsonb) AS items\nFROM menu WHERE active;",
+        "options": {
+          "queryReplacement": "={{ $json.chat_id }}"
+        }
+      },
+      "id": "3709b358-e8c2-4784-b47e-28e8bbef9e58",
+      "name": "Menu Query",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        980,
+        440
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ID",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const fmt = n => 'Rp' + String(Math.round(Number(n) || 0)).replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\nconst r = $input.first().json;\nconst items = r.items || [];\nlet t = 'Menu\\n\\n';\nif (!items.length) t += 'The menu is empty.';\nelse t += items.map(x => x.name + ' - ' + fmt(x.price) + (x.track_stock ? ' (stock ' + x.stock + ')' : '')).join('\\n');\nreturn [{ json: { chat_id: r.chat_id, reply_text: t } }];"
+      },
+      "id": "38eb5774-3031-4105-9b28-0e05a60df7c5",
+      "name": "Format Menu",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, aliases, price, stock, min_stock, track_stock FROM menu WHERE active ORDER BY name;",
+        "options": {}
+      },
+      "id": "3749ecab-10d0-4df7-98d1-cc8a25e2d9c8",
+      "name": "Fetch Menu for Order",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        980,
+        800
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ID",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(r => r && r.id);\nconst tg = $('Normalize Message').first().json;\nconst menu_text = rows.length\n  ? rows.map(r => '- ' + r.name + ((r.aliases || []).length ? ' (aliases: ' + r.aliases.join(', ') + ')' : '')).join('\\n')\n  : '(menu is empty)';\nreturn [{ json: {\n  chat_id: tg.chat_id, update_id: tg.update_id, text: tg.text, from_name: tg.from_name,\n  menu: rows, menu_text\n} }];"
+      },
+      "id": "d339785f-bd2f-4550-90d3-ac4038016d39",
+      "name": "Prepare Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ 'MENU LIST:\\n' + $json.menu_text + '\\n\\nCASHIER MESSAGE:\\n' + $json.text }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "You are an order parser for a small food stall. Your job is to turn the cashier's message into structured JSON.\n\nRULES:\n- An official menu list is provided. Match each item in the message to the closest menu item (tolerate typos and abbreviations). Write the item name EXACTLY as it appears in the menu list.\n- If an item is not on the menu, write its original name as-is. Never invent menu items.\n- If no quantity is given, qty = 1. Quantities may be written as words (one, two, three, ...).\n- If the message is not an order (greeting, question, etc.), set intent = \"other\" and items = [].\n- Fill customer_name if one is mentioned (e.g. \"for Budi\", \"under the name Sari\"), otherwise use an empty string.\n- Fill note with special requests (e.g. \"not spicy\", \"takeaway\"), otherwise use an empty string.\n- Do not calculate prices. Output ONLY JSON that matches the schema."
+            }
+          ]
+        }
+      },
+      "id": "9d0f99c1-6c04-484d-9bb4-799fc0ff9051",
+      "name": "Parse Order (LLM)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        1460,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {
+          "temperature": 0
+        }
+      },
+      "id": "0fdedc4b-fb1f-461c-979a-edfc65eb6410",
+      "name": "Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1400,
+        1040
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_ID",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "fromJson",
+        "jsonSchemaExample": "{\n  \"intent\": \"order\",\n  \"customer_name\": \"Budi\",\n  \"note\": \"not spicy\",\n  \"items\": [\n    {\n      \"name\": \"Nasi Goreng\",\n      \"qty\": 2\n    },\n    {\n      \"name\": \"Es Teh\",\n      \"qty\": 1\n    }\n  ]\n}"
+      },
+      "id": "2728672d-2699-4430-9f18-6a0776d1d06a",
+      "name": "Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        1580,
+        1040
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const ctx = $('Prepare Context').first().json;\nconst raw = $('Parse Order (LLM)').first().json;\nlet parsed = raw.output ?? raw.text ?? raw.response ?? raw;\nif (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch (e) { parsed = {}; } }\nif (parsed && parsed.output && typeof parsed.output === 'object') parsed = parsed.output;\nparsed = parsed || {};\n\nconst norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9\\s]/g, ' ').replace(/\\s+/g, ' ').trim();\nconst base = { chat_id: ctx.chat_id, update_id: ctx.update_id };\nconst menu = (ctx.menu || []).map(m => ({ ...m, keys: [m.name, ...(m.aliases || [])].map(norm) }));\n\nif (parsed.intent !== 'order' || !Array.isArray(parsed.items) || parsed.items.length === 0) {\n  return [{ json: { ...base, ok: false,\n    reply_text: 'That message was not recognized as an order.\\n\\nExample: \"2 nasi goreng, 1 es teh for Budi\"\\nSend /help for the list of commands.' } }];\n}\n\nconst errors = [];\nconst agg = new Map();\nfor (const it of parsed.items) {\n  const qty = Math.round(Number(it.qty));\n  if (!Number.isFinite(qty) || qty < 1 || qty > 99) { errors.push('Invalid quantity for \"' + it.name + '\"'); continue; }\n  const m = menu.find(x => x.keys.includes(norm(it.name)));\n  if (!m) { errors.push('Menu item not found: \"' + it.name + '\"'); continue; }\n  agg.set(m.id, (agg.get(m.id) || 0) + qty);\n}\n\nconst items = [];\nlet total = 0;\nfor (const [id, qty] of agg) {\n  const m = menu.find(x => x.id === id);\n  if (m.track_stock && Number(m.stock) < qty) {\n    errors.push('Not enough stock for ' + m.name + ' (' + m.stock + ' left, ' + qty + ' requested)');\n    continue;\n  }\n  const subtotal = Number(m.price) * qty;\n  total += subtotal;\n  items.push({ menu_id: m.id, name: m.name, qty, unit_price: Number(m.price), subtotal });\n}\n\nif (errors.length) {\n  return [{ json: { ...base, ok: false,\n    reply_text: 'Order not processed:\\n- ' + errors.join('\\n- ') + '\\n\\nPlease correct it and send it again.' } }];\n}\n\nreturn [{ json: { ...base, ok: true,\n  customer_name: String(parsed.customer_name || '').trim(),\n  note: String(parsed.note || '').trim(),\n  total, items, items_json: JSON.stringify(items) } }];"
+      },
+      "id": "25f48054-0e62-4b25-97d5-0245880e62ad",
+      "name": "Validate & Calculate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1720,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3255f7c7-1b59-4cbb-b9c3-968015da7793",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2ea33fc2-6c69-4a20-bd0f-090380f81c5e",
+      "name": "Order Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1960,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH new_order AS (\n  INSERT INTO orders (telegram_update_id, chat_id, customer_name, total, note)\n  VALUES ($1::bigint, $2::bigint, NULLIF($3::text, ''), $4::numeric, NULLIF($5::text, ''))\n  ON CONFLICT (telegram_update_id) DO NOTHING\n  RETURNING id, created_at\n),\nins AS (\n  INSERT INTO order_items (order_id, menu_id, name, qty, unit_price, subtotal)\n  SELECT n.id, (i->>'menu_id')::int, i->>'name', (i->>'qty')::int,\n         (i->>'unit_price')::numeric, (i->>'subtotal')::numeric\n  FROM new_order n, jsonb_array_elements($6::jsonb) AS i\n  RETURNING menu_id, qty\n),\nupd AS (\n  UPDATE menu m SET stock = m.stock - s.qty\n  FROM (SELECT menu_id, SUM(qty) AS qty FROM ins GROUP BY menu_id) s\n  WHERE m.id = s.menu_id AND m.track_stock\n  RETURNING m.name, m.stock, m.min_stock\n)\nSELECT n.id AS order_id,\n       COALESCE((SELECT jsonb_agg(jsonb_build_object('name', name, 'stock', stock))\n                 FROM upd WHERE stock <= min_stock), '[]'::jsonb) AS low_stock\nFROM new_order n;",
+        "options": {
+          "queryReplacement": "={{ [ $json.update_id, $json.chat_id, $json.customer_name, $json.total, $json.note, $json.items_json ] }}"
+        }
+      },
+      "id": "734dd5d3-accf-4b3a-8c1d-d5312c4e84ad",
+      "name": "Save Order",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2200,
+        700
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_ID",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const fmt = n => 'Rp' + String(Math.round(Number(n) || 0)).replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\nconst ctx = $('Validate & Calculate').first().json;\nconst res = $input.first().json;\nlet t = 'Order #' + res.order_id + ' saved' + (ctx.customer_name ? ' - ' + ctx.customer_name : '') + '\\n\\n';\nt += ctx.items.map(i => i.qty + 'x ' + i.name + ' @ ' + fmt(i.unit_price) + ' = ' + fmt(i.subtotal)).join('\\n');\nt += '\\n\\nTotal: ' + fmt(ctx.total);\nif (ctx.note) t += '\\nNote: ' + ctx.note;\nconst low = res.low_stock || [];\nif (low.length) t += '\\n\\nLow stock: ' + low.map(x => x.name + ' (' + x.stock + ' left)').join(', ');\nreturn [{ json: { chat_id: ctx.chat_id, reply_text: t } }];"
+      },
+      "id": "c80743aa-8274-4072-b2ff-39f0e7ff0b29",
+      "name": "Format Receipt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ea2a0604-4f4a-4a0f-9821-417f37800776",
+              "name": "chat_id",
+              "value": "={{ $json.chat_id }}",
+              "type": "string"
+            },
+            {
+              "id": "6340dfaa-d445-48f8-b770-0a1cfb9c4f07",
+              "name": "reply_text",
+              "value": "The order could not be saved (stock may be insufficient, or a database error occurred). Check /stock and try again.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d4414014-90e1-4ee2-884f-3e9aa48cd001",
+      "name": "Save Failed Text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2440,
+        820
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 21 * * *"
+            }
+          ]
+        }
+      },
+      "id": "db6ed9ee-02a8-4e6d-8d5c-1b31df9e44a9",
+      "name": "Daily Report Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        1260
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "4fcc97dd-d36f-4fed-a350-3e85a78496ec",
+              "name": "chat_id",
+              "value": "REPLACE_WITH_OWNER_CHAT_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "dfe8b6b6-cfe8-4313-a112-a0c0427fe110",
+      "name": "Owner Chat",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        1260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.reply_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "9040280b-28a1-4abb-9eb4-1e5b0a20f0fe",
+      "name": "Send Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2700,
+        480
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_ID",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Message": {
+      "main": [
+        [
+          {
+            "node": "Access Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Access Check": {
+      "main": [
+        [
+          {
+            "node": "Route Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Access Denied Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Access Denied Text": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Message": {
+      "main": [
+        [
+          {
+            "node": "Report Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Stock Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Menu Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Help Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Menu for Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Help Text": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report Query": {
+      "main": [
+        [
+          {
+            "node": "Format Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Report": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stock Query": {
+      "main": [
+        [
+          {
+            "node": "Format Stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Stock": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Menu Query": {
+      "main": [
+        [
+          {
+            "node": "Format Menu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Menu": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Menu for Order": {
+      "main": [
+        [
+          {
+            "node": "Prepare Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context": {
+      "main": [
+        [
+          {
+            "node": "Parse Order (LLM)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Parse Order (LLM)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Parse Order (LLM)",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Order (LLM)": {
+      "main": [
+        [
+          {
+            "node": "Validate & Calculate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Calculate": {
+      "main": [
+        [
+          {
+            "node": "Order Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order Valid?": {
+      "main": [
+        [
+          {
+            "node": "Save Order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Order": {
+      "main": [
+        [
+          {
+            "node": "Format Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save Failed Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Receipt": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Failed Text": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Report Schedule": {
+      "main": [
+        [
+          {
+            "node": "Owner Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Owner Chat": {
+      "main": [
+        [
+          {
+            "node": "Report Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "active": false,
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
